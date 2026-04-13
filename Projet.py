@@ -1,10 +1,17 @@
-# ouais les jeunes 
-#ouai la ouai
+#%% LIBRAIRIES 
 
+import os
 import numpy as np
 import matplotlib.pyplot as plt
-import os
+import cv2
 
+from sklearn.preprocessing import LabelEncoder
+from sklearn.decomposition import PCA
+
+from functions import *
+
+
+#%% PREMIERE SEANCE ENSEMBLE (LIVESHARE)
 
 donnees = []
 
@@ -38,72 +45,105 @@ def preprocess_image(image_path, re_size= (500,500)):
     return img_resized
 
 
-def ACP_dim2(data, labels_lignes=None, labels_colonnes=None):
-    """
-    Réalise une ACP en 2 dimensions sur un jeu de données.
+#%% STEP 1 — Configuration
+# /!\ chemin RELATIF /!\ il faut run en précisant qu'on est dans Ma421-ML-Project folder
+#sinon indiquer le chemin absolue mais dépend de l'ordi de chacun
 
-    Paramètres :
-    - data : tableau numpy de taille (m, n) contenant les données brutes.
-    - labels_lignes : liste des labels pour chaque individu (ligne).
-    - labels_colonnes : liste des labels pour chaque variable (colonne).
+DATA_PATH = '.'
 
-    Retourne :
-    - P : matrice des coordonnées des individus projetés sur les 2 premiers axes.
-    - C : matrice des contributions des variables aux 2 premiers axes.
-    - L : liste des taux d'inertie expliquée par les 2 premiers axes.
-    """
+TRAIN_ANNOT = os.path.join(DATA_PATH, 'images_family_train.txt')
+TEST_ANNOT  = os.path.join(DATA_PATH, 'images_family_test.txt')
+IMAGE_DIR   = os.path.join(DATA_PATH, 'images')
+ 
+IMG_SIZE = 64      # resize images to 64x64 (same as MATLAB: imgSize = 64)
+NUM_PCS  = 500      # number of principal components to keep (same as MATLAB: numPCs = 100)
 
-    # 1. Centrage et réduction des données
-    m, n = data.shape
-    moyennes = np.mean(data, axis=0)
-    data_centree = data - moyennes
-    ecarts_types = np.std(data_centree, axis=0, ddof=0)
-    R = data_centree / ecarts_types
+#%% STEP 2 — Load Annotations
 
-    # 2. Décomposition en valeurs singulières (SVD)
-    U, S, VT = np.linalg.svd(R, full_matrices=False)
+train_imgs, labels_train = load_annotations(TRAIN_ANNOT)
+test_imgs,  labels_test  = load_annotations(TEST_ANNOT)
 
-    # 3. Calcul des coordonnées des individus projetés (P)
-    P = U[:, :2] @ np.diag(S[:2])
+# convertir le label (ex: 'A330') en entier (ex: 3) 
+#il le fait par ordre alphabétique
+le = LabelEncoder()
+le.fit(labels_train + labels_test)
+y_train = le.transform(labels_train)
+y_test  = le.transform(labels_test)
 
-    # 4. Calcul des contributions des variables (C)
-    C = (1/(m*n)) * VT.T @ np.diag(S**2)
-    C = C[:2, :].T  # On ne garde que les 2 premières composantes
+classes     = le.classes_
+n_train     = len(train_imgs)
+n_test      = len(test_imgs)
+num_classes = len(classes)
 
-    # 5. Calcul des taux d'inertie expliquée (L)
-    L = (S**2) / (m*n)
-    L = L[:2]
+#%% STEP 3 — Feature Extraction (resize + flatten + normalize)
+# Preprocessing with OpenCV (cv2):
+#   1. Load image in grayscale (cv2.IMREAD_GRAYSCALE)
+#   2. Remove the bottom 20 pixels (photo credit banner, useless for the algo)
+#   3. Resize to IMG_SIZE x IMG_SIZE
+#   4. Flatten to a 1D vector and normalize to [0, 1]
+#
+# Since we work in grayscale, each image produces a vector of size IMG_SIZE*IMG_SIZE
+# (instead of IMG_SIZE*IMG_SIZE*3 for RGB).
 
-    # 6. Visualisation
-    cmap = plt.get_cmap("tab10")
-    if labels_lignes is None:
-        labels_lignes = np.arange(m)
-    labels_colors = {i: labels_lignes[i] for i in range(m)}
+# Pour les grosses matrices X
+#chaque ligne = 1 photo (car en N&B on peut voir la photo comme un vecteur)
+#chaque colonne = 1 pixel de notre photo en nuance de gris (ici 4096 car on les a redimensionner en 64*64 = 4096)
+print("\nLoading training images...")
+X_train = load_images(train_imgs, IMAGE_DIR, IMG_SIZE)
+ 
+print("Loading test images...")
+X_test = load_images(test_imgs, IMAGE_DIR, IMG_SIZE)
+ 
+print(f"  X_train shape: {X_train.shape}  (n_samples × n_features)")
+print(f"  X_test  shape: {X_test.shape}")
 
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
-    plt.suptitle("Analyse en composantes principales en dimension 2", fontsize=16, fontweight="bold")
 
-    # Projection des individus
-    ax1.set_title("Représentation des données projetées", fontsize=14, fontweight="bold")
-    for i in range(m):
-        ax1.scatter(P[i, 0], P[i, 1], c=cmap(labels_colors[i]), label=labels_lignes[i])
-    ax1.set_xlabel(f'$v_1$ (taux explicatif {100*L[0]:.2f}%)', fontsize=12)
-    ax1.set_ylabel(f'$v_2$ (taux explicatif {100*L[1]:.2f}%)', fontsize=12)
-    ax1.grid(True)
+#%% STEP 4 — PCA for Dimensionality Reduction
 
-    # Cercle des corrélations
-    ax2.set_title("Cercle des corrélations", fontsize=14, fontweight="bold")
-    for i in range(n):
-        ax2.arrow(0, 0, C[i, 0], C[i, 1], color='b', alpha=0.7, head_width=0.05)
-        ax2.text(C[i, 0]*1.15, C[i, 1]*1.15, labels_colonnes[i] if labels_colonnes else f'Var {i+1}', color='b', ha='center', va='center')
-    circle = plt.Circle((0, 0), 1, color='r', fill=False, linestyle='--')
-    ax2.add_patch(circle)
-    ax2.set_xlim(-1.2, 1.2)
-    ax2.set_ylim(-1.2, 1.2)
-    ax2.set_aspect('equal')
-    ax2.grid(True)
+#j'ai fais le choix d'utiliser sklearn directement
+#si on a du temps, on pourrait faire notre ACP nous même en prenant les cours de Couffi
 
-    plt.tight_layout()
-    plt.show()
-
-    return P, C, L
+# In sklearn, PCA automatically:
+#   - centers the data (subtracts the mean internally)
+#   - computes the SVD to find principal components
+#   - projects onto the top n_components
+#
+# sklearn.decomposition.PCA parameters:
+#   n_components = number of principal components K to keep
+#   The attribute components_ corresponds to MATLAB's coeff (eigenvectors)
+#   The method transform() projects the data: Z = (X - mu) @ coeff[:, :K]
+ 
+print(f"\nApplying PCA with n_components = {NUM_PCS}...")
+ 
+pca = PCA(n_components=NUM_PCS)
+X_train_pca = pca.fit_transform(X_train)   # fit on training data + project
+X_test_pca  = pca.transform(X_test)         # project test data (same basis)
+ 
+print(f"  X_train after PCA: {X_train_pca.shape}  (reduced from {X_train.shape[1]} to {NUM_PCS})")
+print(f"  X_test  after PCA: {X_test_pca.shape}")
+ 
+# --- Explained variance analysis ---
+# This corresponds to the course metric (eq. 105):
+#   1 - sum(S_j, j=1..K) / sum(S_j, j=1..M)  <=  epsilon
+# where S_j are the eigenvalues. sklearn gives this as explained_variance_ratio_.
+ 
+cumulative_variance = np.cumsum(pca.explained_variance_ratio_)
+total_variance_kept = cumulative_variance[-1]
+print(f"  Cumulative variance retained with {NUM_PCS} PCs: {total_variance_kept:.4f} ({total_variance_kept*100:.1f}%)")
+ 
+# Plot the cumulative explained variance
+plt.figure(figsize=(8, 4))
+plt.plot(range(1, NUM_PCS + 1), cumulative_variance, 'b-o', markersize=2)
+plt.xlabel('Number of Principal Components (K)')
+plt.ylabel('Cumulative Explained Variance')
+plt.title('PCA — Choosing K (number of components)')
+plt.axhline(y=0.95, color='r', linestyle='--', label='95% threshold')
+plt.axhline(y=0.99, color='g', linestyle='--', label='99% threshold')
+plt.legend()
+plt.grid(True, alpha=0.3)
+plt.tight_layout()
+plt.savefig(os.path.join(DATA_PATH, 'pca_variance.png'), dpi=150)
+plt.show()
+print("  → Figure saved: pca_variance.png")
+ 
+ 
