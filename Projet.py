@@ -10,6 +10,7 @@ from sklearn.preprocessing import LabelEncoder
 from sklearn.decomposition import PCA
 from sklearn.svm import SVC
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+from sklearn.neural_network import MLPClassifier
 
 from functions import *
 
@@ -59,7 +60,7 @@ TEST_ANNOT  = os.path.join(DATA_PATH, 'images_family_test.txt')
 IMAGE_DIR   = os.path.join(DATA_PATH, 'images')
  
 IMG_SIZE = 128      # resize images to 64x64 (same as MATLAB: imgSize = 64)
-NUM_PCS  = 500    # number of principal components to keep
+NUM_PCS  = 100    # number of principal components to keep
 
 #%% STEP 2 — Load Annotations
 
@@ -111,7 +112,7 @@ X_train_pca = pca.fit_transform(X_train)   # projette les images train sur ses c
 X_test_pca  = pca.transform(X_test)        # projette les images test sur les c.p. de l'ensemble train 
 
 
-#%% # STEP 5 — 1st Classification Test with SVM --> only to calibrate the best NUM_PCS
+#%% STEP 5 — 1st Classification Test with SVM --> only to calibrate the best NUM_PCS
 
 #utilisation de la librairie sklearn aussi (fct SVC)
 
@@ -127,13 +128,85 @@ svm_clf.fit(X_train_pca, y_train)
 elapsed = time.time() - start_time
 print(f"  Training complete in {elapsed:.2f} seconds.")
  
-#%% STEP 6 — Prediction and Evaluation
+#%% STEP 6 — SVM
 
 y_pred_train = svm_clf.predict(X_train_pca)
 y_pred_test  = svm_clf.predict(X_test_pca)
  
 train_acc = accuracy_score(y_train, y_pred_train)
 test_acc  = accuracy_score(y_test,  y_pred_test)
+
+
+#%% STEP 6 - Neural Network
+
+# 1. Train a Multi-Layer Perceptron on the PCA-reduced features
+mlp_clf = MLPClassifier(
+    hidden_layer_sizes=(128,64),  # five hidden layers
+    activation='logistic',
+    solver='adam',
+    max_iter=1000,
+    random_state=42, 
+    verbose=True
+)
+
+start_time = time.time()
+mlp_clf.fit(X_train_pca, y_train)
+elapsed = time.time() - start_time
+print(f"  MLP training complete in {elapsed:.2f} seconds.")
+
+# 2. Predictions on train and test sets
+y_pred_train_mlp = mlp_clf.predict(X_train_pca)
+y_pred_test_mlp  = mlp_clf.predict(X_test_pca)
+
+# 3. Accuracy
+train_acc_mlp = accuracy_score(y_train, y_pred_train_mlp)
+test_acc_mlp  = accuracy_score(y_test,  y_pred_test_mlp)
+print(f"  Training accuracy : {train_acc_mlp:.4f} ({train_acc_mlp*100:.1f}%)")
+print(f"  Test accuracy     : {test_acc_mlp:.4f}  ({test_acc_mlp*100:.1f}%)")
+
+# 4. Classification report (precision, recall, F1 per class)
+print("\nClassification Report (MLP — Test Set):")
+print(classification_report(y_test, y_pred_test_mlp, target_names=classes))
+
+# 5. Confusion matrix
+cm_mlp = confusion_matrix(y_test, y_pred_test_mlp)
+
+# 6. Confusion matrix visualization
+fig, ax = plt.subplots(figsize=(10, 8))
+im = ax.imshow(cm_mlp, interpolation='nearest', cmap=plt.cm.Blues, vmin=0, vmax=len(y_test) // num_classes)
+plt.colorbar(im)
+tick_marks = np.arange(num_classes)
+ax.set_xticks(tick_marks)
+ax.set_yticks(tick_marks)
+ax.set_xticklabels(classes, rotation=45, ha='right', fontsize=8)
+ax.set_yticklabels(classes, fontsize=8)
+ax.set_xlabel('Predicted label')
+ax.set_ylabel('True label') 
+ax.set_title('Confusion Matrix — Neural Network (2 hidden layers - 1000 iterations)')
+plt.tight_layout()
+plt.savefig(os.path.join(DATA_PATH, 'confusion_matrix_mlp.png'), dpi=150)
+plt.show()
+print("  → Figure saved: confusion_matrix_mlp.png")
+
+#%% 7. Confusion matrix — Train Set
+cm_mlp_train = confusion_matrix(y_train, y_pred_train_mlp)
+
+fig, ax = plt.subplots(figsize=(10, 8))
+im = ax.imshow(cm_mlp_train, interpolation='nearest', cmap=plt.cm.Blues,
+               vmin=0, vmax=len(y_train) // num_classes)
+plt.colorbar(im)
+tick_marks = np.arange(num_classes)
+ax.set_xticks(tick_marks)
+ax.set_yticks(tick_marks)
+ax.set_xticklabels(classes, rotation=45, ha='right', fontsize=8)
+ax.set_yticklabels(classes, fontsize=8)
+ax.set_xlabel('Predicted label')
+ax.set_ylabel('True label')
+ax.set_title('Confusion Matrix — Neural Network (Train Set) (5 hidden layers)')
+plt.tight_layout()
+plt.savefig(os.path.join(DATA_PATH, 'confusion_matrix_mlp_train.png'), dpi=150)
+plt.show()
+print("  → Figure saved: confusion_matrix_mlp_train.png")
 
 #%% affichage des résultats
 
@@ -148,7 +221,7 @@ print(classification_report(y_test, y_pred_test, target_names=classes))
 cm = confusion_matrix(y_test, y_pred_test)
 plt.figure(figsize=(10, 8))
 plt.imshow(cm, interpolation='nearest', cmap=plt.cm.Blues)
-plt.title('Confusion Matrix — Aircraft Family Classification')
+plt.title('Confusion Matrix — SVM')
 plt.colorbar()
 tick_marks = np.arange(num_classes)
 plt.xticks(tick_marks, classes, rotation=45, ha='right', fontsize=8)
@@ -198,4 +271,48 @@ plt.tight_layout()
 plt.savefig(os.path.join(DATA_PATH, 'accuracy_vs_num_pcs.png'), dpi=150)
 plt.show()
 print("  → Figure saved: accuracy_vs_num_pcs.png")
+
+#%%
+
+pcs_range = np.unique(np.logspace(np.log10(10), np.log10(1000), 50).astype(int))
+
+# PCA complète une seule fois jusqu'au max
+pca_full = PCA(n_components=max(pcs_range))
+X_train_pca_full = pca_full.fit_transform(X_train)
+X_test_pca_full  = pca_full.transform(X_test)
+
+test_accuracies_mlp = []
+
+for n_pcs in pcs_range:
+    X_train_reduced = X_train_pca_full[:, :n_pcs]
+    X_test_reduced  = X_test_pca_full[:, :n_pcs]
+
+    mlp_temp = MLPClassifier(
+        hidden_layer_sizes=(128, 64),   # deux couches
+        activation='logistic',
+        solver='adam',
+        alpha=0.01,
+        max_iter=200,
+        random_state=42
+    )
+    mlp_temp.fit(X_train_reduced, y_train)
+
+    y_pred = mlp_temp.predict(X_test_reduced)
+    acc = accuracy_score(y_test, y_pred)
+    test_accuracies_mlp.append(acc)
+
+    print(f"  NUM_PCS = {n_pcs:4d}  →  test_acc = {acc:.4f} ({acc*100:.1f}%)")
+
+#%% Plot
+plt.figure(figsize=(10, 5))
+plt.plot(pcs_range, test_accuracies_mlp, 'b-o', markersize=4)
+plt.xscale('log')
+plt.xlabel('Number of Principal Components (log scale)')
+plt.ylabel('Test Accuracy')
+plt.title('Test Accuracy vs Number of PCA Components — Neural Network (2 layers)')
+plt.grid(True, which='both', alpha=0.3)
+plt.tight_layout()
+plt.savefig(os.path.join(DATA_PATH, 'accuracy_vs_num_pcs_mlp.png'), dpi=150)
+plt.show()
+print("  → Figure saved: accuracy_vs_num_pcs_mlp.png")
  
