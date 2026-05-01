@@ -1,318 +1,85 @@
-#%% LIBRAIRIES 
-
-import os
-import numpy as np
-import matplotlib.pyplot as plt
-import cv2
 import time
+import matplotlib.pyplot as plt
 
-from sklearn.preprocessing import LabelEncoder
-from sklearn.decomposition import PCA
 from sklearn.svm import SVC
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
 from sklearn.neural_network import MLPClassifier
 
-from functions import *
+from functions_ML_TD import *
+from functions_ML_sklearn import *
+from confusion_matrix_display import *
 
 
-#%% PREMIERE SEANCE ENSEMBLE (LIVESHARE)
+#%% récupération des données prétraitées (dans le fichier preprocess.py)
 
-donnees = []
+import preprocess 
 
-with open(r"C:\Users\morga\OneDrive - IPSA\Bureau\Aero4\machine_learning\Ma421-ML-Project\images_family_trainval.txt", "r") as f:
-    for line in f:
-        partis = line.strip().split(" ",1) # on sépare au preier esapce
-        
-        donnees.append([partis[0], partis[1]])
+X_train_pca = preprocess.X_train_pca
+y_train = preprocess.y_train
 
-donnees = np.array(donnees)
+X_test_pca = preprocess.X_test_pca
+y_test = preprocess.y_test
 
-def preprocess_image(image_path, re_size= (500,500)):
-    """
-    Charge une image, la convertit en niveaux de gris, supprime 20 pixels en bas,
-    et la redimensionne en 500x500.
-    """
-    # Charger l'image en niveaux de gris
-    img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
-    if img is None:
-        raise ValueError(f"Impossible de charger l'image : {image_path}")
-    
-    # Supprimer 20 pixels en bas
-    height, width = img.shape
-    if height <= 20:
-        raise ValueError("L'image est trop petite pour supprimer 20 pixels en bas.")
-    img_cropped = img[:-20, :]
-    
-    # Redimensionner en 500x500
-    img_resized = cv2.resize(img_cropped, re_size)
-    
-    return img_resized
+classes     = preprocess.classes
+n_train     = preprocess.n_train
+n_test      = preprocess.n_test
+num_classes = preprocess.num_classes
 
+IMG_SIZE = preprocess.IMG_SIZE
+NUM_PCS  = preprocess.NUM_PCS
 
-#%% STEP 1 — Configuration
-# /!\ chemin RELATIF /!\ il faut run en précisant qu'on est dans Ma421-ML-Project folder
-#sinon indiquer le chemin absolue mais dépend de l'ordi de chacun
-
-DATA_PATH = '.'
-
-TRAIN_ANNOT = os.path.join(DATA_PATH, 'images_family_train.txt')
-TEST_ANNOT  = os.path.join(DATA_PATH, 'images_family_test.txt')
-IMAGE_DIR   = os.path.join(DATA_PATH, 'images')
- 
-IMG_SIZE = 128      # resize images to 64x64 (same as MATLAB: imgSize = 64)
-NUM_PCS  = 100    # number of principal components to keep
-
-#%% STEP 2 — Load Annotations
-
-train_imgs, labels_train = load_annotations(TRAIN_ANNOT)
-test_imgs,  labels_test  = load_annotations(TEST_ANNOT)
-
-# convertir le label (ex: 'A330') en entier (ex: 3) 
-#il le fait par ordre alphabétique
-le = LabelEncoder()
-le.fit(labels_train + labels_test)
-y_train = le.transform(labels_train)
-y_test  = le.transform(labels_test)
-
-classes     = le.classes_
-n_train     = len(train_imgs)
-n_test      = len(test_imgs)
-num_classes = len(classes)
-
-#%% STEP 3 — Feature Extraction (resize + flatten + normalize)
-# Preprocessing with OpenCV (cv2):
-#   1. Load image in grayscale (cv2.IMREAD_GRAYSCALE)
-#   2. Remove the bottom 20 pixels (photo credit banner, useless for the algo)
-#   3. Resize to IMG_SIZE x IMG_SIZE
-#   4. Flatten to a 1D vector and normalize to [0, 1]
-#
-# Since we work in grayscale, each image produces a vector of size IMG_SIZE*IMG_SIZE
-# (instead of IMG_SIZE*IMG_SIZE*3 for RGB).
-
-# Pour les grosses matrices X
-#chaque ligne = 1 photo (car en N&B on peut voir la photo comme un vecteur)
-#chaque colonne = 1 pixel de notre photo en nuance de gris (ici 4096 car on les a redimensionner en 64*64 = 4096)
-print("\nLoading training images...")
-X_train = load_images(train_imgs, IMAGE_DIR, IMG_SIZE)
- 
-print("Loading test images...")
-X_test = load_images(test_imgs, IMAGE_DIR, IMG_SIZE)
- 
-print(f"  X_train shape: {X_train.shape}  (n_samples × n_features)")
-print(f"  X_test  shape: {X_test.shape}")
-
-
-#%% STEP 4 — PCA for Dimensionality Reduction
-
-#j'ai fais le choix d'utiliser sklearn directement
-#si on a du temps, on pourrait faire notre ACP nous même en prenant les cours de Couffi
-
-pca = PCA(n_components=NUM_PCS)
-X_train_pca = pca.fit_transform(X_train)   # projette les images train sur ses composantes principales 
-X_test_pca  = pca.transform(X_test)        # projette les images test sur les c.p. de l'ensemble train 
-
-
-#%% STEP 5 — 1st Classification Test with SVM --> only to calibrate the best NUM_PCS
-
-#utilisation de la librairie sklearn aussi (fct SVC)
-
-svm_clf = SVC(kernel='rbf', C=10, gamma='scale', decision_function_shape='ovr')
-
-# SVC parameters:
-#   C     = regularisation parameter (equivalent to 'C' in the course, eq. 97)
-#   kernel = 'rbf' → Gaussian kernel: K(x,l) = exp(-||x-l||² / 2σ²)
-#   gamma  = 1/(2σ²), controls the smoothness of the decision boundary
+#%% SVM (Training)
 
 start_time = time.time()
-svm_clf.fit(X_train_pca, y_train)
+svm_sklearn.fit(X_train_pca, y_train)  #file: functions_ML_sklearn
 elapsed = time.time() - start_time
 print(f"  Training complete in {elapsed:.2f} seconds.")
  
-#%% STEP 6 — SVM
+#%% SVM (Test)
 
-y_pred_train = svm_clf.predict(X_train_pca)
-y_pred_test  = svm_clf.predict(X_test_pca)
- 
-train_acc = accuracy_score(y_train, y_pred_train)
-test_acc  = accuracy_score(y_test,  y_pred_test)
+print("Start of the SVM test")
+start_time = time.time()
 
+y_pred_test_SVM  = svm_sklearn.predict(X_test_pca) #file: functions_ML_sklearn
+test_acc_SVM  = accuracy_score(y_test,  y_pred_test_SVM)
 
-#%% STEP 6 - Neural Network
+elapsed = time.time() - start_time
 
-# 1. Train a Multi-Layer Perceptron on the PCA-reduced features
-mlp_clf = MLPClassifier(
-    hidden_layer_sizes=(128,64),  # five hidden layers
-    activation='logistic',
-    solver='adam',
-    max_iter=1000,
-    random_state=42, 
-    verbose=True
-)
+print(f"  SVM Test complete in {elapsed:.2f} seconds.")
+print(f"  Test accuracy     : {test_acc_SVM:.4f}  ({test_acc_SVM*100:.1f}%) ")
+
+#%% SVM (Test) - Confusion Matrix
+
+cm_SVM = confusion_matrix(y_test, y_pred_test_SVM)
+confusion_matrix_display(cm_SVM, y_test, num_classes, classes, f"Matrice de confusion (normalisée) / SVM / {NUM_PCS} composantes principales / images de taille : {IMG_SIZE} x {IMG_SIZE} ", save = False)  #file: confusion_matrix_display
+
+#%% Neural Network - MLP (Training)
 
 start_time = time.time()
-mlp_clf.fit(X_train_pca, y_train)
+mlp_sklearn.fit(X_train_pca, y_train) #file: functions_ML_sklearn
 elapsed = time.time() - start_time
 print(f"  MLP training complete in {elapsed:.2f} seconds.")
 
-# 2. Predictions on train and test sets
-y_pred_train_mlp = mlp_clf.predict(X_train_pca)
-y_pred_test_mlp  = mlp_clf.predict(X_test_pca)
+#%% Neural Network - MLP (Test)
 
-# 3. Accuracy
-train_acc_mlp = accuracy_score(y_train, y_pred_train_mlp)
+start_time = time.time()
+
+y_pred_test_mlp  = mlp_sklearn.predict(X_test_pca) #file: functions_ML_sklearn
 test_acc_mlp  = accuracy_score(y_test,  y_pred_test_mlp)
-print(f"  Training accuracy : {train_acc_mlp:.4f} ({train_acc_mlp*100:.1f}%)")
+
+elapsed = time.time() - start_time
+
+print(f"  MLP Test complete in {elapsed:.2f} seconds.")
 print(f"  Test accuracy     : {test_acc_mlp:.4f}  ({test_acc_mlp*100:.1f}%)")
 
-# 4. Classification report (precision, recall, F1 per class)
+#%% Neural Network - MLP (Test) - Details
+
 print("\nClassification Report (MLP — Test Set):")
 print(classification_report(y_test, y_pred_test_mlp, target_names=classes))
 
-# 5. Confusion matrix
+#%% Neural Network - MLP (Test) - Confusion Matrix
+
 cm_mlp = confusion_matrix(y_test, y_pred_test_mlp)
-
-# 6. Confusion matrix visualization
-fig, ax = plt.subplots(figsize=(10, 8))
-im = ax.imshow(cm_mlp, interpolation='nearest', cmap=plt.cm.Blues, vmin=0, vmax=len(y_test) // num_classes)
-plt.colorbar(im)
-tick_marks = np.arange(num_classes)
-ax.set_xticks(tick_marks)
-ax.set_yticks(tick_marks)
-ax.set_xticklabels(classes, rotation=45, ha='right', fontsize=8)
-ax.set_yticklabels(classes, fontsize=8)
-ax.set_xlabel('Predicted label')
-ax.set_ylabel('True label') 
-ax.set_title('Confusion Matrix — Neural Network (2 hidden layers - 1000 iterations)')
-plt.tight_layout()
-plt.savefig(os.path.join(DATA_PATH, 'confusion_matrix_mlp.png'), dpi=150)
-plt.show()
-print("  → Figure saved: confusion_matrix_mlp.png")
-
-#%% 7. Confusion matrix — Train Set
-cm_mlp_train = confusion_matrix(y_train, y_pred_train_mlp)
-
-fig, ax = plt.subplots(figsize=(10, 8))
-im = ax.imshow(cm_mlp_train, interpolation='nearest', cmap=plt.cm.Blues,
-               vmin=0, vmax=len(y_train) // num_classes)
-plt.colorbar(im)
-tick_marks = np.arange(num_classes)
-ax.set_xticks(tick_marks)
-ax.set_yticks(tick_marks)
-ax.set_xticklabels(classes, rotation=45, ha='right', fontsize=8)
-ax.set_yticklabels(classes, fontsize=8)
-ax.set_xlabel('Predicted label')
-ax.set_ylabel('True label')
-ax.set_title('Confusion Matrix — Neural Network (Train Set) (5 hidden layers)')
-plt.tight_layout()
-plt.savefig(os.path.join(DATA_PATH, 'confusion_matrix_mlp_train.png'), dpi=150)
-plt.show()
-print("  → Figure saved: confusion_matrix_mlp_train.png")
-
-#%% affichage des résultats
-
-print(f"  Training accuracy: {train_acc:.4f} ({train_acc*100:.1f}%)")
-print(f"  Test accuracy    : {test_acc:.4f}  ({test_acc*100:.1f}%)")
- 
-# Detailed classification report (precision, recall, F1 per class)
-print("\n--- Classification Report (Test Set) ---")
-print(classification_report(y_test, y_pred_test, target_names=classes))
-
-# Confusion matrix (colors only, no numbers)
-cm = confusion_matrix(y_test, y_pred_test)
-plt.figure(figsize=(10, 8))
-plt.imshow(cm, interpolation='nearest', cmap=plt.cm.Blues)
-plt.title('Confusion Matrix — SVM')
-plt.colorbar()
-tick_marks = np.arange(num_classes)
-plt.xticks(tick_marks, classes, rotation=45, ha='right', fontsize=8)
-plt.yticks(tick_marks, classes, fontsize=8)
-plt.xlabel('Predicted label')
-plt.ylabel('True label')
-plt.tight_layout()
-plt.savefig(os.path.join(DATA_PATH, 'confusion_matrix.png'), dpi=150)
-plt.show()
-print("  → Figure saved: confusion_matrix.png")
- 
+confusion_matrix_display(cm_mlp, y_test, num_classes, classes, f"Matrice de confusion (normalisée) / MLP / {NUM_PCS} composantes principales / images de taille : {IMG_SIZE} x {IMG_SIZE} ", save = False)  #file: confusion_matrix_display
 
 
-#%% BIS — Loop: Training Accuracy vs NUM_PCS
-
-pcs_range = list(range(100, 3334 + 1, 100))
-test_accuracies = []
-
-# PCA complète une seule fois
-print("\nFitting full PCA once...")
-pca_full = PCA(n_components=max(pcs_range))
-X_train_pca_full = pca_full.fit_transform(X_train)
-X_test_pca_full  = pca_full.transform(X_test)
-
-for n_pcs in pcs_range:
-    X_train_reduced = X_train_pca_full[:, :n_pcs]
-    X_test_reduced  = X_test_pca_full[:, :n_pcs]
-    
-    svm_temp = SVC(kernel='rbf', C=10, gamma='scale', decision_function_shape='ovr')
-    svm_temp.fit(X_train_reduced, y_train)
-    
-    y_pred = svm_temp.predict(X_test_reduced)
-    acc = accuracy_score(y_test, y_pred)
-    test_accuracies.append(acc)
-    
-    print(f"  NUM_PCS = {n_pcs:4d}  →  test_acc = {acc:.4f} ({acc*100:.1f}%)")
-
-# Tracé du graphe
-plt.figure(figsize=(10, 5))
-plt.plot(pcs_range, test_accuracies, 'r-o', markersize=4)
-plt.xlabel('Number of Principal Components (NUM_PCS)')
-plt.ylabel('Test Accuracy')
-plt.title('Test Accuracy vs Number of Principal Components')
-plt.grid(True, alpha=0.3)
-plt.ylim([0, 1.05])
-plt.tight_layout()
-plt.savefig(os.path.join(DATA_PATH, 'accuracy_vs_num_pcs.png'), dpi=150)
-plt.show()
-print("  → Figure saved: accuracy_vs_num_pcs.png")
-
-#%%
-
-pcs_range = np.unique(np.logspace(np.log10(10), np.log10(1000), 50).astype(int))
-
-# PCA complète une seule fois jusqu'au max
-pca_full = PCA(n_components=max(pcs_range))
-X_train_pca_full = pca_full.fit_transform(X_train)
-X_test_pca_full  = pca_full.transform(X_test)
-
-test_accuracies_mlp = []
-
-for n_pcs in pcs_range:
-    X_train_reduced = X_train_pca_full[:, :n_pcs]
-    X_test_reduced  = X_test_pca_full[:, :n_pcs]
-
-    mlp_temp = MLPClassifier(
-        hidden_layer_sizes=(128, 64),   # deux couches
-        activation='logistic',
-        solver='adam',
-        alpha=0.01,
-        max_iter=200,
-        random_state=42
-    )
-    mlp_temp.fit(X_train_reduced, y_train)
-
-    y_pred = mlp_temp.predict(X_test_reduced)
-    acc = accuracy_score(y_test, y_pred)
-    test_accuracies_mlp.append(acc)
-
-    print(f"  NUM_PCS = {n_pcs:4d}  →  test_acc = {acc:.4f} ({acc*100:.1f}%)")
-
-#%% Plot
-plt.figure(figsize=(10, 5))
-plt.plot(pcs_range, test_accuracies_mlp, 'b-o', markersize=4)
-plt.xscale('log')
-plt.xlabel('Number of Principal Components (log scale)')
-plt.ylabel('Test Accuracy')
-plt.title('Test Accuracy vs Number of PCA Components — Neural Network (2 layers)')
-plt.grid(True, which='both', alpha=0.3)
-plt.tight_layout()
-plt.savefig(os.path.join(DATA_PATH, 'accuracy_vs_num_pcs_mlp.png'), dpi=150)
-plt.show()
-print("  → Figure saved: accuracy_vs_num_pcs_mlp.png")
- 
