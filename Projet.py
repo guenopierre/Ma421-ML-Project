@@ -1,5 +1,6 @@
 import time
 import matplotlib.pyplot as plt
+import importlib, functions_ML_sklearn
 
 from sklearn.svm import SVC
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
@@ -55,7 +56,12 @@ confusion_matrix_display(cm_SVM, y_test, num_classes, classes, f"Matrice de conf
 
 #%% Neural Network - MLP (Training)
 
+importlib.reload(functions_ML_sklearn)
+
+print(f"Hidden Layers: ({hidden_layers})\nMax iterations: {max_iter}")
+
 start_time = time.time()
+print("MLP running...")
 mlp_sklearn.fit(X_train_pca, y_train) #file: functions_ML_sklearn
 elapsed = time.time() - start_time
 print(f"  MLP training complete in {elapsed:.2f} seconds.")
@@ -80,6 +86,6 @@ print(classification_report(y_test, y_pred_test_mlp, target_names=classes))
 #%% Neural Network - MLP (Test) - Confusion Matrix
 
 cm_mlp = confusion_matrix(y_test, y_pred_test_mlp)
-confusion_matrix_display(cm_mlp, y_test, num_classes, classes, f"Matrice de confusion (normalisée) / MLP / {NUM_PCS} composantes principales / images de taille : {IMG_SIZE} x {IMG_SIZE} ", save = False)  #file: confusion_matrix_display
+confusion_matrix_display(cm_mlp, y_test, num_classes, classes, f"Matrice de confusion (normalisée) / MLP / hidden layers: {hidden_layers} / {NUM_PCS} composantes principales / images de taille : {IMG_SIZE} x {IMG_SIZE} ", save = False)  #file: confusion_matrix_display
 
 
