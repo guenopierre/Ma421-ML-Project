@@ -5,6 +5,7 @@ import importlib, functions_ML_sklearn
 from sklearn.svm import SVC
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
 from sklearn.neural_network import MLPClassifier
+from sklearn.model_selection import RandomizedSearchCV
 
 from functions_ML_TD import *
 from functions_ML_sklearn import *
@@ -14,20 +15,44 @@ from confusion_matrix_display import *
 #%% récupération des données prétraitées (dans le fichier preprocess.py)
 
 import preprocess 
+import preprocess_like_matlab
 
-X_train_pca = preprocess.X_train_pca
-y_train = preprocess.y_train
 
-X_test_pca = preprocess.X_test_pca
-y_test = preprocess.y_test
+images_noir_et_blanc = 0
+images_couleur = 1
 
-classes     = preprocess.classes
-n_train     = preprocess.n_train
-n_test      = preprocess.n_test
-num_classes = preprocess.num_classes
-
-IMG_SIZE = preprocess.IMG_SIZE
-NUM_PCS  = preprocess.NUM_PCS
+if images_noir_et_blanc ==1:
+    X_train_pca = preprocess.X_train_pca
+    y_train = preprocess.y_train
+    
+    X_test_pca = preprocess.X_test_pca
+    y_test = preprocess.y_test
+    
+    classes     = preprocess.classes
+    n_train     = preprocess.n_train
+    n_test      = preprocess.n_test
+    num_classes = preprocess.num_classes
+    
+    IMG_SIZE = preprocess.IMG_SIZE
+    COLOR_SIZE = 1
+    NUM_PCS  = preprocess.NUM_PCS
+    
+if images_couleur==1:
+    X_train_pca = preprocess_like_matlab.X_train_pca
+    y_train = preprocess_like_matlab.y_train
+    
+    X_test_pca = preprocess_like_matlab.X_test_pca
+    y_test = preprocess_like_matlab.y_test
+    
+    classes     = preprocess_like_matlab.classes
+    n_train     = preprocess_like_matlab.n_train
+    n_test      = preprocess_like_matlab.n_test
+    num_classes = preprocess_like_matlab.num_classes
+    
+    IMG_SIZE = preprocess_like_matlab.IMG_SIZE
+    COLOR_SIZE = 3
+    NUM_PCS  = preprocess_like_matlab.NUM_PCS
+    
 
 #%% SVM (Training)
 
@@ -52,7 +77,7 @@ print(f"  Test accuracy     : {test_acc_SVM:.4f}  ({test_acc_SVM*100:.1f}%) ")
 #%% SVM (Test) - Confusion Matrix
 
 cm_SVM = confusion_matrix(y_test, y_pred_test_SVM)
-confusion_matrix_display(cm_SVM, y_test, num_classes, classes, f"Matrice de confusion (normalisée) / SVM / {NUM_PCS} composantes principales / images de taille : {IMG_SIZE} x {IMG_SIZE} ", save = False)  #file: confusion_matrix_display
+confusion_matrix_display(cm_SVM, y_test, num_classes, classes, f"Matrice de confusion (normalisée) / SVM / {NUM_PCS} composantes principales / images de taille : 1 x {IMG_SIZE} x {IMG_SIZE} ", save = False)  #file: confusion_matrix_display
 
 #%% Neural Network - MLP (Training)
 
@@ -86,6 +111,7 @@ print(classification_report(y_test, y_pred_test_mlp, target_names=classes))
 #%% Neural Network - MLP (Test) - Confusion Matrix
 
 cm_mlp = confusion_matrix(y_test, y_pred_test_mlp)
-confusion_matrix_display(cm_mlp, y_test, num_classes, classes, f"Matrice de confusion (normalisée) / MLP / hidden layers: {hidden_layers} / {NUM_PCS} composantes principales / images de taille : {IMG_SIZE} x {IMG_SIZE} ", save = False)  #file: confusion_matrix_display
+confusion_matrix_display(cm_mlp, y_test, num_classes, classes, f"Matrice de confusion (normalisée) / MLP / accuracy: {test_acc_mlp*100:.1f}% \n hidden layers: {hidden_layers} / {NUM_PCS} composantes principales / images de taille : {COLOR_SIZE} x {IMG_SIZE} x {IMG_SIZE} ", save = False)  #file: confusion_matrix_display
+
 
 
