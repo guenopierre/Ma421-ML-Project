@@ -4,7 +4,7 @@ from sklearn.neural_network import MLPClassifier
 
 
 #%%SVM
-svm_sklearn = SVC(kernel='rbf', C=10, gamma='scale', decision_function_shape='ovr') # librairie sklearn.svm.SVC
+svm_sklearn = SVC(kernel='rbf', C=1, gamma='scale', decision_function_shape='ovr') # librairie sklearn.svm.SVC
 
 #%%Neural Network
 

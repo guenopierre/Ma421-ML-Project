@@ -15,17 +15,17 @@ from confusion_matrix_display import *
 #%% PREPROCESS 
 
 
-# 0 = N&B  (avec crop du bandeau de crédit, IMG_SIZE par défaut = 128)
-# 1 = RGB  (façon Matlab, sans crop, IMG_SIZE par défaut = 64)
+# 0 = N&B; 1 = RGB
 images_couleur = 1
  
-# 0 = pas d'équilibrage des classes
-# 1 = sous-échantillonnage pour avoir le même nombre d'images par classe
-balance_tri = 1
+# 0 = pas d'équilibrage des classes; 1 = sous-échantillonnage pour avoir le même nombre d'images par classe
+balance_tri = 0 #pour le train
+balance_test = 1 #pour le test
  
-# Hyper-paramètres pilotés depuis le main.
-# Mettre None pour utiliser la valeur par défaut (128 en N&B, 64 en couleur).
+# redimensions de nos images (carrées)
 IMG_SIZE = 64
+
+# composantes principales gardées
 NUM_PCS  = 100
  
 from preprocess import run_preprocessing
@@ -33,6 +33,7 @@ from preprocess import run_preprocessing
 pp = run_preprocessing(
     images_couleur = images_couleur,
     balance_tri    = balance_tri,
+    balance_test   = balance_test,
     IMG_SIZE       = IMG_SIZE,
     NUM_PCS        = NUM_PCS,
 )
@@ -49,7 +50,7 @@ n_train     = pp['n_train']
 n_test      = pp['n_test']
 num_classes = pp['num_classes']
  
-IMG_SIZE    = pp['IMG_SIZE']     # valeur réellement utilisée (résolue si None)
+IMG_SIZE    = pp['IMG_SIZE']     
 NUM_PCS     = pp['NUM_PCS']
 COLOR_SIZE  = pp['COLOR_SIZE']
 

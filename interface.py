@@ -18,6 +18,7 @@ soient déjà entraînés en mémoire.
 """
 
 import os
+import sys
 import traceback
 import numpy as np
 import cv2
@@ -25,16 +26,13 @@ import tkinter as tk
 from tkinter import filedialog, messagebox
 from PIL import Image, ImageTk
 
-# ---------------------------------------------------------------------------
-# Récupération des modèles et de la PCA déjà entraînés
-# ---------------------------------------------------------------------------
-# IMPORTANT : on récupère les modèles depuis le namespace global de la session
-# Python en cours (typiquement __main__ quand on lance via runfile dans Spyder).
-# Cela évite le problème du `importlib.reload(functions_ML_sklearn)` dans
-# Projet.py qui remplace l'objet svm_sklearn par un SVM neuf, non entraîné,
-# dans le module functions_ML_sklearn.
-import sys
+from sklearn.exceptions import NotFittedError
+from sklearn.utils.validation import check_is_fitted
 
+
+# ---------------------------------------------------------------------------
+# Récupération depuis la session Python en cours (Projet.py exécuté avant)
+# ---------------------------------------------------------------------------
 def _get_from_session(name):
     """Récupère une variable du namespace __main__ (la session Python courante)."""
     main_mod = sys.modules.get('__main__')
@@ -42,11 +40,11 @@ def _get_from_session(name):
         return getattr(main_mod, name)
     return None
 
-# 1) D'abord depuis la session Python en cours (le namespace de Projet.py)
+
+# 1) Récupérer les modèles entraînés depuis Projet.py
 svm_model = _get_from_session('svm_sklearn')
 mlp_model = _get_from_session('mlp_sklearn')
 
-# 2) Sinon, fallback sur le module (attention : peut être non entraîné après reload)
 if svm_model is None or mlp_model is None:
     import functions_ML_sklearn
     if svm_model is None:
@@ -54,28 +52,46 @@ if svm_model is None or mlp_model is None:
     if mlp_model is None:
         mlp_model = functions_ML_sklearn.mlp_sklearn
 
-# 3) Configuration images (mêmes drapeaux que Projet.py)
-images_noir_et_blanc = 0
-images_couleur       = 1
+# 2) Récupérer le dictionnaire `pp` produit par run_preprocessing dans Projet.py
+pp = _get_from_session('pp')
+if pp is None:
+    raise RuntimeError(
+        "Le dictionnaire `pp` (résultat de run_preprocessing) est introuvable "
+        "dans la session Python. Lance d'abord Projet.py dans la même session."
+    )
 
-if images_noir_et_blanc == 1:
-    import preprocess as pp
-elif images_couleur == 1:
-    import preprocess_like_matlab as pp
-else:
-    raise RuntimeError("Aucun mode d'image sélectionné (N&B ou couleur).")
+# 3) Extraire toutes les infos nécessaires au prétraitement d'une nouvelle image
+classes        = pp['classes']
+IMG_SIZE       = pp['IMG_SIZE']
+NUM_PCS        = pp['NUM_PCS']
+COLOR_SIZE     = pp['COLOR_SIZE']
+images_couleur = 1 if COLOR_SIZE == 3 else 0
 
-classes    = pp.classes
-IMG_SIZE   = pp.IMG_SIZE
-NUM_PCS    = pp.NUM_PCS
-pca        = pp.pca
-mu         = getattr(pp, 'mu', None)
-COLOR_SIZE = 3 if images_couleur == 1 else 1
+# Objets PCA et moyenne (selon ce qui est exporté par run_preprocessing)
+pca = pp.get('pca', None)
+mu  = pp.get('mu', None)
+scaler = pp.get('scaler', None)  # si jamais un StandardScaler est utilisé
 
-# Vérification immédiate dans la console : les modèles sont-ils bien entraînés ?
-from sklearn.exceptions import NotFittedError
-from sklearn.utils.validation import check_is_fitted
+if pca is None:
+    # Fallback : essayer de récupérer depuis le module preprocess
+    try:
+        import preprocess as _pp_mod
+        pca = getattr(_pp_mod, 'pca', None)
+        if mu is None:
+            mu = getattr(_pp_mod, 'mu', None)
+    except Exception:
+        pass
 
+if pca is None:
+    raise RuntimeError(
+        "Impossible de récupérer l'objet PCA entraîné. "
+        "Vérifie que run_preprocessing expose bien `pca` dans son dictionnaire de sortie."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Vérification que les modèles sont entraînés
+# ---------------------------------------------------------------------------
 def _is_fitted(model):
     try:
         check_is_fitted(model)
@@ -85,17 +101,32 @@ def _is_fitted(model):
 
 print(f"[interface.py] SVM entraîné : {_is_fitted(svm_model)}")
 print(f"[interface.py] MLP entraîné : {_is_fitted(mlp_model)}")
+print(f"[interface.py] Mode image   : {'RGB' if images_couleur else 'N&B'} "
+      f"({COLOR_SIZE}x{IMG_SIZE}x{IMG_SIZE})")
+print(f"[interface.py] PCA          : {NUM_PCS} composantes")
+
 if not _is_fitted(svm_model) or not _is_fitted(mlp_model):
     print("[interface.py] ⚠  Au moins un modèle n'est pas entraîné !")
     print("[interface.py] ⚠  Lance d'abord Projet.py dans la même session.")
 
 
 # ---------------------------------------------------------------------------
-# Prétraitement d'une nouvelle image (identique au pipeline d'entraînement)
+# Prétraitement d'une nouvelle image (identique à run_preprocessing)
 # ---------------------------------------------------------------------------
 def preprocess_new_image(image_path):
-    """Charge et prétraite une image de la même façon que le jeu d'entraînement."""
+    """
+    Charge et prétraite une image de la même façon que le pipeline
+    d'entraînement (run_preprocessing dans preprocess.py).
 
+    Étapes :
+      1. Lecture (RGB ou N&B selon le mode)
+      2. Suppression du bandeau crédit photo (20 px en bas)
+      3. Redimensionnement à IMG_SIZE x IMG_SIZE
+      4. Normalisation [0, 1]
+      5. Aplatissement (order='F' = column-major façon MATLAB)
+      6. Centrage par la moyenne du jeu d'entraînement
+      7. Projection PCA
+    """
     # 1) Lecture
     if images_couleur == 1:
         img = cv2.imread(image_path, cv2.IMREAD_COLOR)
@@ -120,11 +151,15 @@ def preprocess_new_image(image_path):
     # 5) Aplatissement (order='F' pour reproduire le column-major MATLAB)
     x_flat = img_norm.flatten(order='F').reshape(1, -1)
 
-    # 6) Centrage
+    # 6) Centrage (si mu fourni)
     if mu is not None:
         x_centered = x_flat - mu
     else:
         x_centered = x_flat
+
+    # 6 bis) Si un scaler a été utilisé pendant l'entraînement
+    if scaler is not None:
+        x_centered = scaler.transform(x_centered)
 
     # 7) Projection PCA
     x_pca = pca.transform(x_centered)
@@ -135,11 +170,7 @@ def preprocess_new_image(image_path):
 # Helper : récupère le top-5 des prédictions avec leurs pourcentages
 # ---------------------------------------------------------------------------
 def predict_top5(model, x_pca):
-    """Retourne une liste de (nom_classe, pourcentage) pour les 5 meilleures prédictions.
-    - predict_proba si dispo (MLP, ou SVC avec probability=True)
-    - sinon softmax sur decision_function (SVC standard)
-    - sinon predict() à 100 % pour la classe prédite uniquement"""
-
+    """Retourne une liste de (nom_classe, pourcentage) pour les 5 meilleures prédictions."""
     if hasattr(model, "predict_proba"):
         try:
             probs = model.predict_proba(x_pca)[0]
@@ -152,7 +183,6 @@ def predict_top5(model, x_pca):
         try:
             scores = model.decision_function(x_pca)
             scores = np.atleast_2d(scores)[0]
-            # Softmax stable
             scores_shift = scores - np.max(scores)
             exp_s = np.exp(scores_shift)
             probs = exp_s / np.sum(exp_s)
@@ -161,7 +191,6 @@ def predict_top5(model, x_pca):
         except Exception:
             pass
 
-    # Fallback : juste la prédiction principale
     pred = int(model.predict(x_pca)[0])
     return [(classes[pred], 100.0)]
 
@@ -234,48 +263,40 @@ class AircraftClassifierApp:
         )
         self.predict_btn.pack(side=tk.LEFT, padx=5)
 
-        # Zone résultat principal (meilleure prédiction)
+        # Résultat principal
         self.result_label = tk.Label(
-            self.root,
-            text="",
+            self.root, text="",
             font=("Helvetica", 14, "bold"),
             bg="#f0f0f0", fg="#1a3d6d",
-            justify=tk.CENTER,
-            wraplength=620,
+            justify=tk.CENTER, wraplength=620,
         )
         self.result_label.pack(pady=15)
 
-        # Cadre pour les top-5 en deux colonnes
+        # Top-5 en deux colonnes
         self.top5_frame = tk.Frame(self.root, bg="#f0f0f0")
         self.top5_frame.pack(pady=10, padx=30, fill=tk.BOTH, expand=True)
 
-        # Colonne gauche : SVM
-        self.svm_frame = tk.Frame(self.top5_frame, bg="#f9f9f9", 
+        # SVM
+        self.svm_frame = tk.Frame(self.top5_frame, bg="#f9f9f9",
                                   highlightbackground="#1a3d6d", highlightthickness=1)
         self.svm_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5)
-
         tk.Label(self.svm_frame, text="🔹 Top-5 SVM", font=("Helvetica", 11, "bold"),
                  bg="#f9f9f9", fg="#1a3d6d").pack(pady=5)
-
         self.svm_text = tk.Label(
             self.svm_frame, text="", justify=tk.LEFT,
-            font=("Courier", 10), bg="#f9f9f9", fg="#333333",
-            anchor="w"
+            font=("Courier", 10), bg="#f9f9f9", fg="#333333", anchor="w"
         )
         self.svm_text.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
 
-        # Colonne droite : MLP
+        # MLP
         self.mlp_frame = tk.Frame(self.top5_frame, bg="#f9f9f9",
                                   highlightbackground="#2e8b57", highlightthickness=1)
         self.mlp_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5)
-
         tk.Label(self.mlp_frame, text="🔹 Top-5 MLP", font=("Helvetica", 11, "bold"),
                  bg="#f9f9f9", fg="#2e8b57").pack(pady=5)
-
         self.mlp_text = tk.Label(
             self.mlp_frame, text="", justify=tk.LEFT,
-            font=("Courier", 10), bg="#f9f9f9", fg="#333333",
-            anchor="w"
+            font=("Courier", 10), bg="#f9f9f9", fg="#333333", anchor="w"
         )
         self.mlp_text.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
 
@@ -302,25 +323,21 @@ class AircraftClassifierApp:
                 text=f"Image chargée : {os.path.basename(path)}",
                 fg="#333333", font=("Helvetica", 11),
             )
-            # Effacer les anciens résultats
             self.svm_text.config(text="")
             self.mlp_text.config(text="")
         except Exception as e:
             messagebox.showerror("Erreur", f"Impossible d'afficher l'image :\n{e}")
 
     def predict(self):
-        """Lance la prédiction et affiche le top-5 pour chaque modèle."""
         if not self.image_path:
             return
 
         try:
             x_pca = preprocess_new_image(self.image_path)
 
-            # Récupération du top-5 pour chaque modèle
             svm_top5 = predict_top5(svm_model, x_pca)
             mlp_top5 = predict_top5(mlp_model, x_pca)
 
-            # Meilleure prédiction = #1 du modèle le plus confiant
             svm_best_class, svm_best_conf = svm_top5[0]
             mlp_best_class, mlp_best_conf = mlp_top5[0]
 
@@ -329,7 +346,6 @@ class AircraftClassifierApp:
             else:
                 best_class, best_conf, best_model = svm_best_class, svm_best_conf, "SVM"
 
-            # Affichage du verdict principal
             verdict = (
                 f"✈  Famille prédite : {best_class}\n"
                 f"Confiance : {best_conf:.1f}%   (modèle : {best_model})"
@@ -337,15 +353,12 @@ class AircraftClassifierApp:
             self.result_label.config(text=verdict, fg="#2e8b57",
                                      font=("Helvetica", 14, "bold"))
 
-            # Formatage du top-5 SVM
             svm_lines = []
             for i, (cls, conf) in enumerate(svm_top5, 1):
-                # Tronquer le nom si trop long
                 cls_short = cls[:28] if len(cls) <= 28 else cls[:25] + "..."
                 svm_lines.append(f"{i}. {cls_short:<30s} {conf:5.1f}%")
             self.svm_text.config(text="\n".join(svm_lines))
 
-            # Formatage du top-5 MLP
             mlp_lines = []
             for i, (cls, conf) in enumerate(mlp_top5, 1):
                 cls_short = cls[:28] if len(cls) <= 28 else cls[:25] + "..."

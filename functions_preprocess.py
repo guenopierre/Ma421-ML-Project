@@ -96,11 +96,7 @@ def balance_classes(img_ids, labels, target_count=None, random_state=42):
     return img_ids_bal, labels_bal
 
 
-# =============================================================================
-#  Fonctions de PRÉPROCESSING D'UNE IMAGE
-#   - version GRAY  : N&B + crop du bandeau de crédit photo (20px du bas)
-#   - version COLOR : RGB façon Matlab, sans crop
-# =============================================================================
+
 
 def preprocess_image_gray(image_path, IMG_SIZE=(64, 64)):
     """
@@ -137,9 +133,16 @@ def preprocess_image_color(image_path, IMG_SIZE=(64, 64)):
     img = cv2.imread(image_path, cv2.IMREAD_COLOR)
     if img is None:
         raise ValueError(f"Cannot load image: {image_path}")
-    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        
+    # Remove bottom 20 pixels (credit banner)
+    height, width = img.shape[:2]
+    if height <= 20:
+        raise ValueError("Image too small to crop 20 pixels from the bottom.")
+    img_cropped = img[:-20, :]
+    
+    img = cv2.cvtColor(img_cropped, cv2.COLOR_BGR2RGB)
 
-    # Resize directly to IMG_SIZE (NO cropping — same as Matlab)
+    # Resize to IMG_SIZE
     img_resized = cv2.resize(img, IMG_SIZE)
 
     return img_resized
