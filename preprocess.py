@@ -24,7 +24,8 @@ from functions_preprocess import (
 
 def run_preprocessing(images_couleur=1,
                       balance_tri=1,
-                      balance_test=0,          # <-- nouveau flag
+                      own_pca = 0,
+                      balance_test=0,          
                       IMG_SIZE=None,
                       NUM_PCS=100,
                       target_per_class=None,
@@ -168,25 +169,31 @@ def run_preprocessing(images_couleur=1,
     print(f"  X_train shape: {X_train.shape}  (n_samples × n_features)")
     print(f"  X_test  shape: {X_test.shape}")
 
-    #%% STEP 4 — Centrage avec la moyenne du TRAIN
-    #
-    #   mu = mean(X_train)          <- calculée sur le train uniquement
-    #   X_train_c = X_train - mu
-    #   X_test_c  = X_test  - mu    <- on soustrait la MÊME moyenne du train
-    #
-    # Le test n'intervient jamais dans le calcul de mu : cela évite toute
-    # fuite d'information (data leakage) du test vers le train.
-
-    mu = X_train.mean(axis=0)
-    X_train_c = X_train - mu
-    X_test_c  = X_test  - mu
+   
 
     #%% STEP 5 — PCA for Dimensionality Reduction
-
-    pca = PCA(n_components=NUM_PCS)
-    X_train_pca = pca.fit_transform(X_train_c)   # fit + projection sur le train
-    X_test_pca  = pca.transform(X_test_c)        # projection sur les c.p. du train
-
+    #d'après le TD (ça prend bcp de temps)
+    print("Normalisation des données")
+    mu    = np.mean(X_train, axis=0)
+    sigma = np.std(X_train, axis=0)
+    X_train_norm = (X_train - mu) / sigma
+    X_test_norm  = (X_test  - mu) / sigma
+    
+    if own_pca ==1:
+        print("Début de l'ACP (celle du TD)")
+        m = X_train_norm.shape[0]
+        Sigma_cov = (1 / m) * X_train_norm.T @ X_train_norm
+        U, s, Vh = np.linalg.svd(Sigma_cov)
+        U_reduce = U[:, :NUM_PCS]                       # matrice M × K
+        X_train_pca = X_train_norm @ U_reduce           # (N_train × K)
+        X_test_pca  = X_test_norm  @ U_reduce           # (N_test  × K)
+    else:
+        #en utilisant sklearn
+        print("Début de l'ACP (avec sklearn)")
+        pca = PCA(n_components=NUM_PCS)
+        X_train_pca = pca.fit_transform(X_train_norm)   # fit + projection sur le train
+        X_test_pca  = pca.transform(X_test_norm)        # projection sur les c.p. du train
+    print("Fin de l'ACP")
     #%% Sortie
 
     return {
@@ -201,6 +208,6 @@ def run_preprocessing(images_couleur=1,
         'IMG_SIZE':    IMG_SIZE,
         'NUM_PCS':     NUM_PCS,
         'COLOR_SIZE':  COLOR_SIZE,
-        'pca':         pca,
-        'mu':          mu,
+        # 'pca':         pca,
+        # 'mu':          mu,
     }
