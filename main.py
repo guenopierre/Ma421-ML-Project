@@ -9,7 +9,7 @@
 DATA_PATH          = "."
 ANNOTATION_FILE    = "images_family_trainval.txt"
 
-IMG_SIZE           = 128      # 64=0.6GB  128=2.2GB  256=8.9GB (float32)
+IMG_SIZE           = 128     # 64=0.6GB  128=2.2GB  256=8.9GB (float32)
 CROP_BOTTOM        = 20
 USE_REMBG          = True
 
