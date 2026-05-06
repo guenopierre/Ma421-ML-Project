@@ -1,0 +1,2 @@
+IMG_SIZE,NUM_PCS,acc_SVM,time_train_SVM,time_test_SVM,acc_MLP,time_train_MLP,time_test_MLP
+64,20,0.0723,0.21,0.38,0.1065,1017.84,0.34
