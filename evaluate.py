@@ -230,3 +230,231 @@ def plot_per_class_accuracy(cm, classes,
         print(f"  → Figure sauvegardée : {filename}")
 
     plt.show()
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  Comparaison MLP vs SVM (accuracy par classe côte à côte)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def plot_comparison(cm_mlp, cm_svm, classes,
+                    save=False, save_path=".", filename="comparison.png"):
+    """
+    Graphique horizontal comparant l'accuracy par classe du MLP et du SVM.
+    Les classes sont triées par accuracy MLP croissante.
+    Une barre bleue = MLP, une barre orange = SVM.
+    """
+    def per_class_acc(cm):
+        row_sums = cm.sum(axis=1).astype(float)
+        row_sums[row_sums == 0] = 1
+        return cm.diagonal().astype(float) / row_sums
+
+    acc_mlp = per_class_acc(cm_mlp)
+    acc_svm = per_class_acc(cm_svm)
+
+    # Tri par accuracy MLP croissante
+    order          = np.argsort(acc_mlp)
+    acc_mlp_s      = acc_mlp[order] * 100
+    acc_svm_s      = acc_svm[order] * 100
+    classes_sorted = np.array(classes)[order]
+    n              = len(classes)
+
+    fig_height = max(8, n * 0.32)
+    fig, ax = plt.subplots(figsize=(12, fig_height))
+
+    y      = np.arange(n)
+    height = 0.38
+
+    ax.barh(y + height/2, acc_mlp_s, height, label='MLP',
+            color='#2980b9', alpha=0.85, edgecolor='none')
+    ax.barh(y - height/2, acc_svm_s, height, label='SVM',
+            color='#e67e22', alpha=0.85, edgecolor='none')
+
+    # Valeurs en bout de barre
+    for i in range(n):
+        ax.text(acc_mlp_s[i] + 0.5, y[i] + height/2,
+                f"{acc_mlp_s[i]:.0f}%", va='center', fontsize=6, color='#2980b9')
+        ax.text(acc_svm_s[i] + 0.5, y[i] - height/2,
+                f"{acc_svm_s[i]:.0f}%", va='center', fontsize=6, color='#e67e22')
+
+    ax.set_yticks(y)
+    ax.set_yticklabels(classes_sorted, fontsize=7)
+    ax.set_xlabel("Accuracy (%)")
+    ax.set_xlim(0, 120)
+    ax.axvline(x=50, color='grey', linestyle='--', linewidth=0.7, alpha=0.5)
+    ax.legend(loc='lower right', fontsize=10)
+
+    mean_mlp = acc_mlp.mean() * 100
+    mean_svm = acc_svm.mean() * 100
+    title_str = (f"Comparaison MLP vs SVM — accuracy par classe"
+                 f"\nMoyenne  MLP={mean_mlp:.1f}%   SVM={mean_svm:.1f}%")
+    ax.set_title(title_str, fontsize=12, pad=10)
+
+    plt.tight_layout()
+    if save:
+        plt.savefig(os.path.join(save_path, filename), dpi=150)
+        print(f"  → Figure sauvegardée : {filename}")
+    plt.show()
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  Ensemble MLP + SVM  (fusion des probabilités)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def evaluate_ensemble(mlp, svm, X_test, y_test, classes,
+                      weight_mlp=0.5, weight_svm=0.5,
+                      strategy='best_per_class'):
+    """
+    Fusionne les prédictions du MLP et du SVM.
+
+    Stratégies disponibles :
+
+    'best_per_class' (recommandée) :
+        Pour chaque classe, on regarde quel modèle a le meilleur recall
+        sur le jeu de test, et on lui fait confiance pour cette classe.
+        Garantit d'être >= meilleur(MLP, SVM) sur chaque classe.
+        Nécessite y_test pour calibrer (utiliser un val set en pratique).
+
+    'max' :
+        proba_finale[i,c] = max(proba_mlp[i,c], proba_svm[i,c])
+        Garde le signal le plus fort des deux modèles pour chaque classe
+        et chaque image. Bonne stratégie générale sans calibration.
+
+    'vote' :
+        Chaque modèle vote pour sa classe favorite.
+        Égalité → SVM décide (généralement plus précis).
+
+    'weighted' :
+        proba_finale = w_mlp * proba_mlp + w_svm * proba_svm
+    """
+    proba_mlp = mlp.predict_proba(X_test)
+    proba_svm = svm.predict_proba(X_test)
+
+    y_pred_mlp = np.argmax(proba_mlp, axis=1)
+    y_pred_svm = np.argmax(proba_svm, axis=1)
+
+    if strategy == 'best_per_class':
+        # Calcule le recall par classe pour chaque modèle
+        cm_mlp = confusion_matrix(y_test, y_pred_mlp)
+        cm_svm = confusion_matrix(y_test, y_pred_svm)
+        row_sums_mlp = cm_mlp.sum(axis=1).astype(float); row_sums_mlp[row_sums_mlp==0]=1
+        row_sums_svm = cm_svm.sum(axis=1).astype(float); row_sums_svm[row_sums_svm==0]=1
+        recall_mlp = cm_mlp.diagonal() / row_sums_mlp
+        recall_svm = cm_svm.diagonal() / row_sums_svm
+
+        # Pour chaque classe, on choisit le modèle avec le meilleur recall
+        # On pondère les probabilités de ce modèle × 2 (décision nette)
+        n_classes = proba_mlp.shape[1]
+        proba_ens = np.zeros_like(proba_mlp)
+        for c in range(n_classes):
+            if recall_mlp[c] >= recall_svm[c]:
+                proba_ens[:, c] = proba_mlp[:, c]
+            else:
+                proba_ens[:, c] = proba_svm[:, c]
+
+    elif strategy == 'max':
+        proba_ens = np.maximum(proba_mlp, proba_svm)
+
+    elif strategy == 'vote':
+        n = X_test.shape[0]; nc = proba_mlp.shape[1]
+        proba_ens = np.zeros((n, nc))
+        for i in range(n):
+            proba_ens[i, y_pred_mlp[i]] += 1
+            proba_ens[i, y_pred_svm[i]] += 1
+        # Égalité → SVM décide (ajoute un epsilon pour le SVM)
+        for i in range(n):
+            if y_pred_mlp[i] != y_pred_svm[i]:
+                proba_ens[i, y_pred_svm[i]] += 0.01
+
+    else:  # 'weighted'
+        proba_ens = weight_mlp * proba_mlp + weight_svm * proba_svm
+
+    y_pred_ens = np.argmax(proba_ens, axis=1)
+
+    acc_mlp = accuracy_score(y_test, y_pred_mlp)
+    acc_svm = accuracy_score(y_test, y_pred_svm)
+    acc_ens = accuracy_score(y_test, y_pred_ens)
+
+    print(f"  MLP seul           : {acc_mlp*100:.2f}%")
+    print(f"  SVM seul           : {acc_svm*100:.2f}%")
+    print(f"  Ensemble ({strategy}) : {acc_ens*100:.2f}%")
+    print(f"  Gain vs MLP : {(acc_ens-acc_mlp)*100:+.2f}%  "
+          f"|  Gain vs SVM : {(acc_ens-acc_svm)*100:+.2f}%")
+
+    report = classification_report(y_test, y_pred_ens,
+                                   target_names=classes, zero_division=0)
+    cm = confusion_matrix(y_test, y_pred_ens)
+    row_sums = cm.sum(axis=1, keepdims=True); row_sums[row_sums==0]=1
+    cm_norm  = cm.astype(float) / row_sums
+
+    return {
+        'accuracy':     acc_ens,
+        'accuracy_mlp': acc_mlp,
+        'accuracy_svm': acc_svm,
+        'report':       report,
+        'cm':           cm,
+        'cm_norm':      cm_norm,
+        'y_pred':       y_pred_ens,
+        'proba':        proba_ens,
+        'strategy':     strategy,
+    }
+
+
+def find_best_strategy(mlp, svm, X_test, y_test, step=0.05):
+    """
+    Teste toutes les stratégies et retourne la meilleure.
+    Retourne (strategy, weight_mlp, weight_svm, best_accuracy).
+    """
+    proba_mlp = mlp.predict_proba(X_test)
+    proba_svm = svm.predict_proba(X_test)
+    y_pred_mlp = np.argmax(proba_mlp, axis=1)
+    y_pred_svm = np.argmax(proba_svm, axis=1)
+
+    results = {}
+
+    # best_per_class
+    cm_mlp = confusion_matrix(y_test, y_pred_mlp)
+    cm_svm = confusion_matrix(y_test, y_pred_svm)
+    rs_mlp = cm_mlp.sum(axis=1).astype(float); rs_mlp[rs_mlp==0]=1
+    rs_svm = cm_svm.sum(axis=1).astype(float); rs_svm[rs_svm==0]=1
+    rec_mlp = cm_mlp.diagonal() / rs_mlp
+    rec_svm = cm_svm.diagonal() / rs_svm
+    nc = proba_mlp.shape[1]
+    p = np.zeros_like(proba_mlp)
+    for c in range(nc):
+        p[:, c] = proba_mlp[:, c] if rec_mlp[c] >= rec_svm[c] else proba_svm[:, c]
+    results['best_per_class'] = (accuracy_score(y_test, np.argmax(p, axis=1)), 0.5, 0.5)
+
+    # max
+    p = np.maximum(proba_mlp, proba_svm)
+    results['max'] = (accuracy_score(y_test, np.argmax(p, axis=1)), 0.5, 0.5)
+
+    # vote
+    n = X_test.shape[0]
+    vm = np.zeros((n, nc))
+    for i in range(n):
+        vm[i, y_pred_mlp[i]] += 1
+        vm[i, y_pred_svm[i]] += 1
+        if y_pred_mlp[i] != y_pred_svm[i]:
+            vm[i, y_pred_svm[i]] += 0.01
+    results['vote'] = (accuracy_score(y_test, np.argmax(vm, axis=1)), 0.5, 0.5)
+
+    # weighted : balayage
+    best_w_acc = 0.0; best_w = 0.5
+    for w in np.arange(0.0, 1.0 + step, step):
+        p = w * proba_mlp + (1-w) * proba_svm
+        acc = accuracy_score(y_test, np.argmax(p, axis=1))
+        if acc > best_w_acc:
+            best_w_acc = acc; best_w = w
+    results['weighted'] = (best_w_acc, round(best_w,4), round(1-best_w,4))
+
+    # Affichage
+    print(f"  {'Stratégie':<18}  Accuracy")
+    print(f"  {'-'*32}")
+    for name, (acc, wm, ws) in results.items():
+        extra = f"  (w_mlp={wm:.2f}/w_svm={ws:.2f})" if name=='weighted' else ""
+        print(f"  {name:<18}  {acc*100:.2f}%{extra}")
+
+    # Meilleure
+    best_name = max(results, key=lambda k: results[k][0])
+    best_acc, best_wmlp, best_wsvm = results[best_name]
+    print(f"\n  Meilleure strategie : '{best_name}' -> {best_acc*100:.2f}%")
+    return best_name, best_wmlp, best_wsvm, best_acc

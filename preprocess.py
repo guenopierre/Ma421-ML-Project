@@ -10,8 +10,8 @@ Pipeline de préprocessing complet :
        c. Suppression du fond par rembg (U2Net)   ← avant le resize
        d. Redimensionnement à img_size × img_size
        e. Sauvegarde dans images_withoutback/      ← cache pour relances rapides
-  4. Split stratifié 70/30
-  5. (optionnel) Data augmentation sur le train uniquement :
+  4. Split 
+  5. Data augmentation sur le train uniquement :
        - On ajoute la version "avec fond" (images originales) de chaque image
          de train, en plus de la version sans fond
        - Le mélange final est aléatoire (random_state différent)
@@ -248,7 +248,8 @@ def run_preprocessing(data_path        = ".",
                       num_pcs          = 150,
                       test_split       = 0.30,
                       random_state     = 42,
-                      cache_dir        = "images_withoutback"):
+                      cache_dir        = "images_withoutback",
+                      classes_to_keep  = None):
     """
     Pipeline complet.
 
@@ -289,6 +290,17 @@ def run_preprocessing(data_path        = ".",
     print("1. Lecture des annotations...")
     img_ids, labels = load_annotations(annot_path)
     print(f"   {len(img_ids)} images  |  {len(set(labels))} classes")
+
+    # ── 1b. Filtrage des classes ──────────────────────────────────────────
+    # Si classes_to_keep est fourni, on retire toutes les images dont la
+    # classe n'est pas dans la liste.
+    if classes_to_keep is not None:
+        keep_set = set(classes_to_keep)
+        before = len(img_ids)
+        img_ids = [i for i, l in zip(img_ids, labels) if l in keep_set]
+        labels  = [l for l in labels if l in keep_set]
+        print(f"   Filtrage classes : {before} → {len(img_ids)} images "
+              f"({len(keep_set)} classes conservées)")
 
     # ── 2. Équilibrage des classes ────────────────────────────────────────
     if do_balance:
@@ -368,6 +380,10 @@ def run_preprocessing(data_path        = ".",
                 print(f"    {j+1}/{n_aug} images originales chargées...")
         X_bg = np.array(bg_vectors, dtype=np.float32)
 
+        # Sauvegarde des labels nobg AVANT le mélange
+        # (utilisé pour le SVM qui s'entraîne sur les images sans fond uniquement)
+        y_nobg = y_train.copy()
+
         # Concaténation : [images sans fond] + [images avec fond]
         X_train_raw = np.concatenate([X_nobg, X_bg], axis=0)
         # Labels doublés dans le même ordre
@@ -386,30 +402,14 @@ def run_preprocessing(data_path        = ".",
               f"({len(train_ids)} sans fond + {len(train_ids)} avec fond)")
     else:
         X_train_raw = X_nobg
+        y_nobg = y_train.copy()
         print(f"\n5. Pas d'augmentation (augment_with_bg=False ou use_rembg=False).")
 
     # X_test_nobg : images de test sans fond (depuis le cache rembg)
     X_test_raw = np.array([vectors_nobg[img_id] for img_id in test_ids],
                           dtype=np.float32)
 
-    # X_test_bg : images de test avec fond (crop + resize, non sauvegardées)
-    # Utilisées pour le test-time augmentation (TTA) dans evaluate.py :
-    # on prédit sur les deux versions et on combine les probabilités.
-    print(f"\n5b. Chargement des images de test originales (avec fond) pour TTA...")
-    test_bg_list = []
-    errors_test_bg = 0
-    for img_id in test_ids:
-        path = os.path.join(image_dir, img_id + ".jpg")
-        try:
-            img = load_one_raw(path, img_size, crop_bottom)
-            test_bg_list.append(img.astype(np.float32).flatten() / 255.0)
-        except Exception as e:
-            test_bg_list.append(np.zeros(img_size * img_size * 3, dtype=np.float32))
-            errors_test_bg += 1
-    X_test_bg_raw = np.array(test_bg_list, dtype=np.float32)
-    if errors_test_bg:
-        print(f"   ⚠ {errors_test_bg} image(s) test avec fond non chargée(s).")
-    print(f"   X_test_bg : {X_test_bg_raw.shape}")
+    # (chargement X_test_bg supprimé — TTA testée et non bénéfique)
 
     print(f"\n   X_train final : {X_train_raw.shape}")
     print(f"   X_test        : {X_test_raw.shape}")
@@ -423,39 +423,39 @@ def run_preprocessing(data_path        = ".",
     sigma = X_nobg.std(axis=0)
     sigma[sigma == 0] = 1.0
 
-    X_train_norm    = ((X_train_raw    - mu) / sigma).astype(np.float32)
-    X_test_norm     = ((X_test_raw     - mu) / sigma).astype(np.float32)
-    X_test_bg_norm  = ((X_test_bg_raw  - mu) / sigma).astype(np.float32)
+    X_train_norm = ((X_train_raw - mu) / sigma).astype(np.float32)
+    X_test_norm  = ((X_test_raw  - mu) / sigma).astype(np.float32)
 
     # ── 8. ACP ────────────────────────────────────────────────────────────
-    # L'ACP est fittée SUR LES IMAGES SANS FOND uniquement (X_nobg normalisé).
-    # Raison : mélanger images avec/sans fond dans le fit PCA crée des
-    # composantes qui capturent la différence fond/pas-fond plutôt que la
-    # forme de l'avion. En fittant sur les images propres, les axes principaux
-    # décrivent la morphologie des avions → meilleure séparation des classes.
+    # Fittée sur les images sans fond uniquement pour que les axes principaux
+    # décrivent la morphologie des avions et non la différence fond/pas-fond.
     print(f"\n7. ACP ({num_pcs} composantes)...")
     X_nobg_norm = ((X_nobg - mu) / sigma).astype(np.float32)
     max_pcs = min(X_nobg_norm.shape[0] - 1, X_nobg_norm.shape[1])
     num_pcs = min(num_pcs, max_pcs)
 
     pca = PCA(n_components=num_pcs, random_state=random_state)
-    pca.fit(X_nobg_norm)                         # fit sur images sans fond
-    X_train    = pca.transform(X_train_norm)     # transform tout le train augmenté
-    X_test     = pca.transform(X_test_norm)      # test sans fond
-    X_test_bg  = pca.transform(X_test_bg_norm)   # test avec fond (pour TTA)
+    pca.fit(X_nobg_norm)                      # fit sur images sans fond
+    X_train = pca.transform(X_train_norm)     # transform train augmenté
+    X_test  = pca.transform(X_test_norm)      # test sans fond
 
     var_exp = pca.explained_variance_ratio_.sum() * 100
     print(f"   Variance expliquée : {var_exp:.1f}%")
     print("\n   ✔ Préprocessing terminé.\n")
 
+    # X_nobg_train : images de train sans fond AVANT augmentation
+    # Les labels y_nobg ont ete sauvegardes avant le melange -> alignement correct
+    X_nobg_train = pca.transform(((X_nobg - mu) / sigma).astype(np.float32))
+
     return {
-        "X_train":   X_train,
-        "X_test":    X_test,      # test sans fond  (version principale)
-        "X_test_bg": X_test_bg,   # test avec fond  (pour TTA)
-        "y_train":   y_train,
-        "y_test":    y_test,
-        "classes":   classes,
-        "pca":       pca,
-        "mu":        mu,
-        "sigma":     sigma,
+        "X_train":      X_train,       # train augmente (nobg + bg melanges)
+        "X_nobg_train": X_nobg_train,  # train sans fond uniquement (pour SVM)
+        "X_test":       X_test,        # test sans fond
+        "y_train":      y_train,       # labels du train augmente
+        "y_nobg_train": y_nobg,        # labels nobg (sauvegardes AVANT melange)
+        "y_test":       y_test,
+        "classes":      classes,
+        "pca":          pca,
+        "mu":           mu,
+        "sigma":        sigma,
     }
