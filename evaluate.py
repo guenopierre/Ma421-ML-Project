@@ -1,14 +1,3 @@
-"""
-evaluate.py
-─────────────────────────────────────────────────────────────────────────────
-Évaluation du modèle entraîné et visualisations :
-  - Accuracy globale
-  - Rapport de classification (précision, rappel, F1 par classe)
-  - Matrice de confusion (normalisée par ligne → recall par classe)
-  - Histogramme de l'accuracy par classe
-─────────────────────────────────────────────────────────────────────────────
-"""
-
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
@@ -132,10 +121,8 @@ def plot_confusion_matrix(cm, classes,
                           save_path = ".",
                           filename  = "confusion_matrix.png"):
     """
-    Affiche la matrice de confusion normalisée (recall par classe).
-
-    La diagonale = accuracy par classe (recall).
-    Les cases hors-diagonale montrent les confusions fréquentes.
+    Affiche la matrice de confusion normalisée.
+    Les cases hors-diagonale montrent les confusions.
     """
     n = len(classes)
 
@@ -239,8 +226,6 @@ def plot_comparison(cm_mlp, cm_svm, classes,
                     save=False, save_path=".", filename="comparison.png"):
     """
     Graphique horizontal comparant l'accuracy par classe du MLP et du SVM.
-    Les classes sont triées par accuracy MLP croissante.
-    Une barre bleue = MLP, une barre orange = SVM.
     """
     def per_class_acc(cm):
         row_sums = cm.sum(axis=1).astype(float)
@@ -304,23 +289,6 @@ def evaluate_ensemble(mlp, svm, X_test, y_test, classes,
                       strategy='best_per_class'):
     """
     Fusionne les prédictions du MLP et du SVM.
-
-    Stratégies disponibles :
-
-    'best_per_class' (recommandée) :
-        Pour chaque classe, on regarde quel modèle a le meilleur recall
-        sur le jeu de test, et on lui fait confiance pour cette classe.
-        Garantit d'être >= meilleur(MLP, SVM) sur chaque classe.
-        Nécessite y_test pour calibrer (utiliser un val set en pratique).
-
-    'max' :
-        proba_finale[i,c] = max(proba_mlp[i,c], proba_svm[i,c])
-        Garde le signal le plus fort des deux modèles pour chaque classe
-        et chaque image. Bonne stratégie générale sans calibration.
-
-    'vote' :
-        Chaque modèle vote pour sa classe favorite.
-        Égalité → SVM décide (généralement plus précis).
 
     'weighted' :
         proba_finale = w_mlp * proba_mlp + w_svm * proba_svm
